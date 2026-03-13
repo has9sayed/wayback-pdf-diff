@@ -282,10 +282,4 @@ Core libraries
     - Async upstream fetches of PDFs
     - CORS handling
     - Process pool for CPU‑heavy diffing work.
-
--------------------------------------------------------------------------------
-License
--------------------------------------------------------------------------------
-
-- License: **AGPL-3.0-only**  
-- Copyright: Internet Archive
+ 
