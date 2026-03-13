@@ -1,0 +1,26 @@
+Metadata-Version: 2.4
+Name: wayback-pdf-diff
+Version: 0.1.0
+Summary: Tools for diffing & comparing PDF content, producing output compatible with web-monitoring-diff.
+Author: Internet Archive
+Maintainer: Internet Archive
+License-Expression: AGPL-3.0-only
+Project-URL: Homepage, https://github.com/internetarchive/wayback-pdf-diff
+Project-URL: Issues, https://github.com/internetarchive/wayback-pdf-diff/issues
+Classifier: Development Status :: 3 - Alpha
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Operating System :: OS Independent
+Classifier: Environment :: Console
+Classifier: Topic :: Internet :: WWW/HTTP
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Topic :: System :: Archiving
+Requires-Python: >=3.10
+Requires-Dist: pymupdf>=1.24.0
+Requires-Dist: fast-diff-match-patch<3,>=2.0.1
+Requires-Dist: Pillow>=10.0.0
+Provides-Extra: server
+Requires-Dist: tornado>=6.0; extra == "server"

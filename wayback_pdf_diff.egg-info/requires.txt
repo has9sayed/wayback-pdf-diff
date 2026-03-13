@@ -1,0 +1,6 @@
+pymupdf>=1.24.0
+fast-diff-match-patch<3,>=2.0.1
+Pillow>=10.0.0
+
+[server]
+tornado>=6.0

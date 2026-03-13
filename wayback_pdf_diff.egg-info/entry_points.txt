@@ -1,0 +1,2 @@
+[console_scripts]
+wayback-pdf-diff = wayback_pdf_diff.server:cli
