@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Diff Viewer</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: "Courier New", Courier, monospace;
+      background: #12121c;
+      color: #c8c8d8;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 8px 18px;
+      background: #1a1a2e;
+      border-bottom: 1px solid #252540;
+      flex-shrink: 0;
+      min-height: 40px;
+    }
+
+    header .title {
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #6868a8;
+    }
+
+    #status {
+      font-size: 11px;
+      color: #5858a0;
+    }
+
+    #status.ready {
+      color: #60c070;
+    }
+
+    #status.error {
+      color: #e05050;
+    }
+
+    .legend {
+      display: flex;
+      gap: 14px;
+      margin-left: auto;
+      font-size: 11px;
+      color: #8080b0;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+    }
+
+    .swatch-del {
+      background: rgba(210, 50, 50, 0.5);
+      border: 1px solid rgba(210, 50, 50, 0.85);
+    }
+
+    .swatch-ins {
+      background: rgba(50, 190, 80, 0.5);
+      border: 1px solid rgba(50, 190, 80, 0.85);
+    }
+
+    /* ── two-panel layout ── */
+    .panels {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .panel + .panel {
+      border-left: 2px solid #1e1e38;
+    }
+
+    .panel-label {
+      padding: 6px 14px;
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: #48488a;
+      background: #161626;
+      border-bottom: 1px solid #1e1e38;
+      flex-shrink: 0;
+    }
+
+    .panel-scroll {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: auto;
+      padding: 14px;
+    }
+
+    .pages {
+      display: inline-flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* ── page canvas + overlay ── */
+    .page-wrap {
+      position: relative;
+      display: block;
+      box-shadow: 0 3px 18px rgba(0, 0, 0, 0.6);
+      background: #fff;
+    }
+
+    .page-wrap canvas {
+      display: block;
+    }
+
+    /* overlay layer — sits on top of the canvas, pointer-events off */
+    .hl-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    /* individual highlight rectangles */
+    .hl {
+      position: absolute;
+    }
+
+    .hl-del {
+      background: rgba(210, 50, 50, 0.30);
+      outline: 1px solid rgba(210, 50, 50, 0.60);
+    }
+
+    .hl-ins {
+      background: rgba(50, 190, 80, 0.30);
+      outline: 1px solid rgba(50, 190, 80, 0.60);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="title">PDF Diff Viewer</span>
+  <span id="status">Initializing</span>
+  <div class="legend">
+    <div class="legend-item">
+      <div class="swatch swatch-del"></div>
+      <span>deleted</span>
+    </div>
+    <div class="legend-item">
+      <div class="swatch swatch-ins"></div>
+      <span>inserted</span>
+    </div>
+  </div>
+</header>
+
+<div class="panels">
+  <div class="panel">
+    <div class="panel-label">Version A &mdash; deletions</div>
+    <div class="panel-scroll">
+      <div class="pages" id="pages-a"></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-label">Version B &mdash; insertions</div>
+    <div class="panel-scroll">
+      <div class="pages" id="pages-b"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+        crossorigin="anonymous"></script>
+<script>
+  'use strict';
+
+  /* ── PDF.js worker ─────────────────────────────────────────────────────── */
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  /* ── rendering scale (PDF points → canvas pixels)
+        PyMuPDF device coordinates and PDF.js canvas coordinates share the same
+        origin (top-left, y-axis pointing down).  Multiplying by SCALE converts
+        PDF points to CSS/canvas pixels at that zoom level.               ── */
+  const SCALE = 1.5;
+
+  /* ── status helper ─────────────────────────────────────────────────────── */
+  const statusEl = document.getElementById('status');
+  function setStatus(msg, cls) {
+    statusEl.textContent = msg;
+    statusEl.className = cls || '';
+  }
+
+  /* ── URL params ─────────────────────────────────────────────────────────── */
+  const params = new URLSearchParams(location.search);
+  const aUrl   = params.get('a');
+  const bUrl   = params.get('b');
+
+  /* ── build per-page highlight map from diff segments ───────────────────── */
+  /**
+   * @param {Array}  segments  - diff.diff array from /pdf_positioned response
+   * @param {number} targetType - -1 for deletions, 1 for insertions
+   * @returns {Object}  { [pageIndex]: [{x, y, w, h}, ...] }
+   */
+  function buildHighlightMap(segments, targetType) {
+    const map = {};
+    for (const seg of segments) {
+      if (seg.type !== targetType) continue;
+      for (const pos of seg.positions) {
+        if (!map[pos.page]) map[pos.page] = [];
+        map[pos.page].push({ x: pos.x, y: pos.y, w: pos.w, h: pos.h });
+      }
+    }
+    return map;
+  }
+
+  /* ── render one PDF with highlights into a container ───────────────────── */
+  /**
+   * @param {ArrayBuffer} pdfBytes
+   * @param {Object}      highlightMap  - from buildHighlightMap
+   * @param {string}      hlClass       - CSS class for highlights
+   * @param {HTMLElement} container
+   */
+  async function renderPdf(pdfBytes, highlightMap, hlClass, container) {
+    const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+
+    for (let pn = 1; pn <= pdf.numPages; pn++) {
+      const page     = await pdf.getPage(pn);
+      const viewport = page.getViewport({ scale: SCALE });
+
+      /* base canvas */
+      const canvas   = document.createElement('canvas');
+      canvas.width   = viewport.width;
+      canvas.height  = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+
+      /* wrapper (position: relative so the overlay anchors to it) */
+      const wrap = document.createElement('div');
+      wrap.className = 'page-wrap';
+      wrap.style.width  = viewport.width  + 'px';
+      wrap.style.height = viewport.height + 'px';
+      wrap.appendChild(canvas);
+
+      /* highlight overlay — only added when there are boxes for this page */
+      const boxes = highlightMap[pn - 1] || [];
+      if (boxes.length > 0) {
+        const layer = document.createElement('div');
+        layer.className = 'hl-layer';
+        layer.style.width  = viewport.width  + 'px';
+        layer.style.height = viewport.height + 'px';
+
+        for (const { x, y, w, h } of boxes) {
+          const div = document.createElement('div');
+          div.className = 'hl ' + hlClass;
+          /* PyMuPDF device-space coords × SCALE = canvas pixels */
+          div.style.left   = (x * SCALE) + 'px';
+          div.style.top    = (y * SCALE) + 'px';
+          div.style.width  = (w * SCALE) + 'px';
+          div.style.height = (h * SCALE) + 'px';
+          layer.appendChild(div);
+        }
+
+        wrap.appendChild(layer);
+      }
+
+      container.appendChild(wrap);
+    }
+  }
+
+  /* ── main ───────────────────────────────────────────────────────────────── */
+  async function main() {
+    if (!aUrl || !bUrl) {
+      setStatus('Provide ?a=<url>&b=<url>', 'error');
+      return;
+    }
+
+    /* 1. fetch positioned diff from the backend */
+    setStatus('Fetching diff…');
+    const diffResp = await fetch(
+      '/pdf_positioned?a=' + encodeURIComponent(aUrl) +
+      '&b='               + encodeURIComponent(bUrl)
+    );
+    if (!diffResp.ok) {
+      const body = await diffResp.json().catch(() => ({}));
+      setStatus('Diff error: ' + (body.error || diffResp.statusText), 'error');
+      return;
+    }
+    const diffData = await diffResp.json();
+
+    /* 2. fetch both PDFs through the server proxy (avoids CORS) */
+    setStatus('Fetching PDFs…');
+    const [aBuf, bBuf] = await Promise.all([
+      fetch('/pdf_proxy?url=' + encodeURIComponent(aUrl)).then(r => r.arrayBuffer()),
+      fetch('/pdf_proxy?url=' + encodeURIComponent(bUrl)).then(r => r.arrayBuffer()),
+    ]);
+
+    /* 3. build highlight maps — deletions go on A, insertions go on B */
+    const delMap = buildHighlightMap(diffData.diff, -1);
+    const insMap = buildHighlightMap(diffData.diff,  1);
+
+    /* 4. render both PDFs with their respective overlays */
+    setStatus('Rendering…');
+    await Promise.all([
+      renderPdf(aBuf, delMap, 'hl-del', document.getElementById('pages-a')),
+      renderPdf(bBuf, insMap, 'hl-ins', document.getElementById('pages-b')),
+    ]);
+
+    const n = diffData.change_count;
+    setStatus(n + ' change' + (n === 1 ? '' : 's'), 'ready');
+  }
+
+  main().catch(err => {
+    setStatus('Error: ' + err.message, 'error');
+    console.error(err);
+  });
+</script>
+</body>
+</html>

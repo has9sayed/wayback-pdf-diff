@@ -7,4 +7,5 @@ from .pdf_diffs import (  # noqa: F401
     pdf_text_diff,
     pdf_text_diff_html,
     pdf_visual_diff,
+    pdf_positioned_diff,
 )

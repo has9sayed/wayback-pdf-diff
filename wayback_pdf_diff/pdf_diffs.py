@@ -157,6 +157,72 @@ def pdf_text_diff_html(a_body: bytes, b_body: bytes) -> dict:
     }
 
 
+# ── positioned diff (text + bounding boxes for overlay rendering) ─────────────
+
+def _positions_for_range(
+    start: int, end: int, word_positions: list[dict]
+) -> list[dict]:
+    """Return bounding boxes for every word whose character span overlaps [start, end)."""
+    return [
+        {
+            "page": wp["page"],
+            "x": wp["x"],
+            "y": wp["y"],
+            "w": wp["w"],
+            "h": wp["h"],
+        }
+        for wp in word_positions
+        if wp["end"] > start and wp["start"] < end
+    ]
+
+
+def pdf_positioned_diff(a_body: bytes, b_body: bytes) -> dict:
+    """Diff two PDFs and return segments with PDF-point bounding box positions.
+
+    Each entry in ``diff`` carries:
+
+    * ``type``      — ``-1`` deletion, ``0`` equal, ``1`` insertion
+    * ``text``      — the text content of the segment
+    * ``positions`` — list of ``{page, x, y, w, h}`` in PDF points
+      (deletions and equal segments reference PDF A; insertions reference PDF B)
+
+    Coordinates use PyMuPDF device-space: origin top-left, y-axis pointing
+    down — multiply by the PDF.js viewport scale to get canvas pixels.
+
+    Output shape::
+
+        {"change_count": int,
+         "diff": [{"type": int, "text": str,
+                   "positions": [{"page": int, "x": float, "y": float,
+                                  "w": float, "h": float}, ...]}, ...]}
+    """
+    a_text, a_pos = extract.extract_positioned_words(a_body)
+    b_text, b_pos = extract.extract_positioned_words(b_body)
+
+    raw_diff = _compute_dmp_diff(a_text, b_text)
+
+    a_offset = b_offset = 0
+    segments: list[dict] = []
+
+    for code, text in raw_diff:
+        n = len(text)
+        if code == 0:
+            positions = _positions_for_range(a_offset, a_offset + n, a_pos)
+            a_offset += n
+            b_offset += n
+        elif code == -1:
+            positions = _positions_for_range(a_offset, a_offset + n, a_pos)
+            a_offset += n
+        else:  # code == 1
+            positions = _positions_for_range(b_offset, b_offset + n, b_pos)
+            b_offset += n
+
+        segments.append({"type": code, "text": text, "positions": positions})
+
+    change_count = sum(1 for code, _ in raw_diff if code != 0)
+    return {"change_count": change_count, "diff": segments}
+
+
 # ── visual / image-based diffs ───────────────────────────────────────────────
 
 def _image_from_png(png_bytes: bytes) -> Image.Image:

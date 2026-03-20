@@ -29,6 +29,8 @@ import tornado.httpclient
 import tornado.ioloop
 import tornado.web
 
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
 import wayback_pdf_diff
 from ..routes import DIFF_ROUTES
 
@@ -283,6 +285,75 @@ class _MockResponse:
         self.headers = {}
 
 
+class ProxyHandler(BaseHandler):
+    """Proxy a remote URL back to the browser.
+
+    ``GET /pdf_proxy?url=<encoded-url>``
+
+    Fetches the target URL server-side (reusing the same fetch logic as
+    ``DiffHandler``) and streams the raw bytes to the browser with the
+    original ``Content-Type``.  Allows the frontend PDF.js viewer to load
+    PDFs from arbitrary origins without CORS issues.
+    """
+
+    async def get(self):
+        url = self.get_argument("url", None)
+        if not url:
+            raise PublicError(400, "Must provide 'url' query parameter")
+        if not url.startswith(("http://", "https://", "file://")):
+            raise PublicError(400, f"URL must use HTTP, HTTPS, or file://: '{url}'")
+
+        if url.startswith("file://"):
+            if os.environ.get("WEB_MONITORING_APP_ENV") == "production":
+                raise PublicError(403, "file:// URLs disabled in production")
+            with open(url[7:], "rb") as fh:
+                body = fh.read()
+            self.set_header("Content-Type", "application/pdf")
+            self.write(body)
+            return
+
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; wayback-pdf-diff/1.0)"}
+        try:
+            client = _get_http_client()
+            response = await client.fetch(
+                url,
+                headers=headers,
+                validate_cert=VALIDATE_TARGET_CERTIFICATES,
+                request_timeout=120.0,
+            )
+        except tornado.httpclient.HTTPError as exc:
+            if (
+                exc.response is not None
+                and exc.response.headers.get("Memento-Datetime") is not None
+            ):
+                response = exc.response
+            else:
+                code = exc.response.code if exc.response else "?"
+                raise PublicError(502, f"Received {code} fetching '{url}': {exc}")
+        except Exception as exc:
+            raise PublicError(502, f"Could not fetch '{url}': {exc}")
+
+        content_type = response.headers.get("Content-Type", "application/pdf")
+        self.set_header("Content-Type", content_type)
+        self.write(response.body)
+
+
+class ViewerHandler(BaseHandler):
+    """Serve the PDF diff viewer HTML page.
+
+    ``GET /viewer?a=<url>&b=<url>``
+
+    The HTML page is self-contained; query parameters are forwarded as-is
+    so the browser-side JavaScript can pick them up via ``location.search``.
+    """
+
+    async def get(self):
+        viewer_path = os.path.join(_STATIC_DIR, "viewer.html")
+        with open(viewer_path, "rb") as fh:
+            self.set_header("Content-Type", "text/html; charset=utf-8")
+            self.write(fh.read())
+
+
 class IndexHandler(BaseHandler):
     async def get(self):
         self.write(
@@ -302,6 +373,8 @@ def make_app() -> tornado.web.Application:
     return tornado.web.Application(
         [
             (r"/healthcheck", HealthCheckHandler),
+            (r"/pdf_proxy", ProxyHandler),
+            (r"/viewer", ViewerHandler),
             (r"/([A-Za-z0-9_]+)", DiffHandler),
             (r"/", IndexHandler),
         ],

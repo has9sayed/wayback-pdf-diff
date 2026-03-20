@@ -25,4 +25,6 @@ DIFF_ROUTES: dict[str, callable] = {
     "pdf_text_rendered": pdf_diffs.pdf_text_diff_html,
     "html_token": pdf_diffs.pdf_text_diff_html,
     "pdf_visual": pdf_diffs.pdf_visual_diff,
+    # Positioned diff — text segments with PDF-point bounding boxes for overlay rendering
+    "pdf_positioned": pdf_diffs.pdf_positioned_diff,
 }
